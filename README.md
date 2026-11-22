@@ -18,7 +18,7 @@ Streamlit UI → Request Processor → Routing Engine ─┬→ Local Engine (Ol
    ```
 2. Install Ollama (https://ollama.com/download), then pull the model:
    ```bash
-   ollama pull qwen3.5:35b
+   ollama pull qwen3:1.7b
    ```
 3. Configure the cloud model (optional; without it, cloud routing and fallback report a clear error):
    ```bash
@@ -93,7 +93,7 @@ Each decision returns `request_id`, `destination`, `reason`, `strategy` and `cat
 {
   "request_id": "req_3f9a1c0b2d4e",
   "model": "local",
-  "model_name": "qwen3.5:35b",
+  "model_name": "qwen3:1.7b",
   "response": "Binary search works by...",
   "status": "success",
   "fallback_used": false,

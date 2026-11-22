@@ -15,8 +15,6 @@ from urllib.parse import quote
 import streamlit as st
 
 from hybrid_router.config import Settings, load_settings
-from hybrid_router.inference.cloud_engine import CloudEngine
-from hybrid_router.model_selection import discover_local_models, select_models
 from hybrid_router.models import Destination
 from hybrid_router.pipeline import HybridPipeline, PipelineOutcome
 from hybrid_router.ui import ALICE_LOGO, icon
@@ -45,15 +43,10 @@ def get_pipeline(settings: Settings) -> HybridPipeline:
     return HybridPipeline(settings=settings)
 
 
-@st.cache_data(ttl=60, show_spinner=False)
-def get_local_models(base_url: str):
-    return discover_local_models(base_url)
-
-
 def init_state() -> None:
     for key, value in {
         "mode_index": 1, "processing": False, "pending": None, "history": [],
-        "input_error": None, "typing": None, "use_context": True, "total_local": 0,
+        "input_error": None, "typing": None, "total_local": 0,
         "total_cloud": 0, "total_fallback": 0, "est_saved_tokens": 0,
     }.items():
         st.session_state.setdefault(key, value)
@@ -66,13 +59,9 @@ def on_submit() -> None:
         return
     st.session_state.input_error = None
     st.session_state.typing = None
-    context = []
-    if st.session_state.use_context:
-        context = [{"role": item["role"], "content": item["content"]} for item in st.session_state.history]
+    context = [{"role": item["role"], "content": item["content"]} for item in st.session_state.history]
     st.session_state.pending = {
-        "prompt": prompt, "mode": MODE_MAP[MODE_KEYS[st.session_state.mode_index]],
-        "context": context, "local_model": st.session_state.active_local_model,
-        "cloud_model": st.session_state.active_cloud_model,
+        "prompt": prompt, "mode": MODE_MAP[MODE_KEYS[st.session_state.mode_index]], "context": context,
     }
     st.session_state.processing = True
 
@@ -108,8 +97,17 @@ def render_mode_picker(busy: bool) -> None:
         st.markdown(f'<style>.st-key-mode-picker {{ --mode-icon: url("data:image/svg+xml,{image}"); }}</style>', unsafe_allow_html=True)
         with st.popover(f"Choose mode: {mode}", disabled=busy):
             with st.container(key="mode-sheet"):
+                # One rule per stop so the thumb logo swaps in the browser as soon as the
+                # slider moves, without waiting for the server rerun.
+                per_stop_icons = "".join(
+                    f'.st-key-mode-sheet:has(input[type="range"][value="{index}"]) '
+                    f'{{ --selector-icon: url("data:image/svg+xml,'
+                    f'{quote(icon(MODE_META[name]["icon"], color="#334457"), safe="")}"); }}'
+                    for index, name in enumerate(MODE_KEYS)
+                )
                 st.markdown(
-                    f'<style>.st-key-mode-sheet {{ --selector-icon: url("data:image/svg+xml,{image}"); }}</style>'
+                    f'<style>.st-key-mode-sheet {{ --selector-icon: url("data:image/svg+xml,{image}"); }}'
+                    f'{per_stop_icons}</style>'
                     '<div class="mode-sheet-heading"><span>Wonders</span><span>Slide to choose</span></div>',
                     unsafe_allow_html=True,
                 )
@@ -167,38 +165,6 @@ def render_chat() -> None:
             )
 
 
-def render_model_settings(settings: Settings, busy: bool) -> Settings:
-    st.session_state.setdefault("active_local_model", settings.local_model)
-    st.session_state.setdefault("active_cloud_model", settings.cloud_model)
-    if st.button("Refresh local models", icon=":material/refresh:", disabled=busy):
-        get_local_models.clear()
-    catalog = get_local_models(settings.ollama_base_url)
-    local_names = list(dict.fromkeys([st.session_state.active_local_model, settings.local_model, *catalog.names]))
-    with st.form("model_settings"):
-        local_name = st.selectbox("Local model", local_names, disabled=busy)
-        cloud_name = st.text_input(
-            "Cloud model", value=st.session_state.active_cloud_model, disabled=busy,
-            help="Enter an OpenAI model ID compatible with Chat Completions.",
-        )
-        applied = st.form_submit_button("Apply models", disabled=busy)
-    if applied:
-        try:
-            selected = select_models(settings, local_name, cloud_name)
-        except ValueError as exc:
-            st.error(str(exc))
-        else:
-            st.session_state.active_local_model = selected.local_model
-            st.session_state.active_cloud_model = selected.cloud_model
-            st.success("Models updated.")
-    selected = select_models(settings, st.session_state.active_local_model, st.session_state.active_cloud_model)
-    if catalog.error:
-        st.caption(catalog.error)
-    elif selected.local_model not in catalog.names:
-        st.warning("Selected local model is not installed. Pull it with Ollama, then refresh.")
-    st.caption("Model choices apply to this session, including fallback in Follow the rabbit mode.")
-    return selected
-
-
 def render_sidebar(settings: Settings, busy: bool) -> Settings:
     with st.sidebar:
         st.markdown(
@@ -206,12 +172,6 @@ def render_sidebar(settings: Settings, busy: bool) -> Settings:
             '<span class="brand-name">Alice</span></div>', unsafe_allow_html=True,
         )
         st.button("New dream", icon=":material/add:", on_click=clear_chat, use_container_width=True, disabled=busy)
-        st.markdown('<div class="sidebar-label">Workspace</div>', unsafe_allow_html=True)
-        with st.expander("Rabbits", icon=":material/tune:"):
-            selected = render_model_settings(settings, busy)
-            if not CloudEngine(selected).configured:
-                st.caption("Add an OpenAI API key to enable cloud inference.")
-        st.toggle("Remember", key="use_context", disabled=busy)
         st.divider()
         st.markdown('<div class="sidebar-label">This dream</div>', unsafe_allow_html=True)
         total = st.session_state.total_local + st.session_state.total_cloud
@@ -227,10 +187,10 @@ def render_sidebar(settings: Settings, busy: bool) -> Settings:
             st.markdown(f'<div class="saved-tokens">~{st.session_state.est_saved_tokens:,} cloud output tokens avoided</div>', unsafe_allow_html=True)
             st.caption("Estimated from response length; actual savings vary by model.")
         st.divider()
-        for model, symbol in ((selected.local_model, "potion"), (selected.cloud_model, "cake")):
+        for model, symbol in ((settings.local_model, "potion"), (settings.cloud_model, "cake")):
             st.markdown(f'<div class="sidebar-model">{icon(symbol)}<span>{html.escape(model)}</span></div>', unsafe_allow_html=True)
         st.markdown('<div class="sidebar-footer">Built for wonders.</div>', unsafe_allow_html=True)
-    return selected
+    return settings
 
 
 def render_composer(busy: bool) -> None:
@@ -247,7 +207,7 @@ def render_composer(busy: bool) -> None:
 
 def process_pending(settings: Settings) -> None:
     pending = st.session_state.pending
-    pipeline = get_pipeline(select_models(settings, pending["local_model"], pending["cloud_model"]))
+    pipeline = get_pipeline(settings)
     outcome = pipeline.run(pending["prompt"], pending["mode"], pending["context"])
     result, decision = outcome.result, outcome.decision
     if result.ok:

@@ -34,7 +34,7 @@ def test_overrides_preserve_defaults_and_limits():
     defaults = Settings(local_timeout_s=42, max_context_messages=6)
     selected = select_models(defaults, " other-local:7b ", " custom-cloud ")
     assert selected == replace(defaults, local_model="other-local:7b", cloud_model="custom-cloud")
-    assert defaults.local_model == "qwen3.5:35b"
+    assert defaults.local_model == "qwen3:1.7b"
 
 
 @pytest.mark.parametrize("local,cloud", [("", "cloud"), ("local", "  "), ("two words", "cloud")])
