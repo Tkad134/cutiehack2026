@@ -54,6 +54,41 @@ def test_conversation_is_sent_as_context(app, monkeypatch):
     assert seen == [0, 2]
 
 
+def test_failed_turns_are_not_sent_as_context(app, monkeypatch):
+    seen = []
+
+    def local(engine, request):
+        seen.append([(m.role, m.content) for m in request.context])
+        if request.prompt == "first":
+            return failure(request.request_id, Destination.LOCAL, engine.model_name, ErrorCode.TIMEOUT, "timed out")
+        return success(request.request_id, Destination.LOCAL, engine.model_name, "ok")
+
+    monkeypatch.setattr("hybrid_router.inference.local_engine.LocalEngine.generate", local)
+    app.select_slider[0].set_value(0).run()  # local only, so the failure is not retried in the cloud
+    app.chat_input[0].set_value("first").run()
+    app.chat_input[0].set_value("second").run()
+    assert not app.exception
+    assert seen[1] == []  # the failed exchange is not context
+    assert [h["content"] for h in app.session_state["history"]][:2] == ["first", "timed out"]  # still on screen
+
+
+def test_long_conversation_stays_on_screen(app, monkeypatch):
+    seen = []
+
+    def local(engine, request):
+        seen.append(len(request.context))
+        return success(request.request_id, Destination.LOCAL, engine.model_name, "ok")
+
+    monkeypatch.setattr("hybrid_router.inference.local_engine.LocalEngine.generate", local)
+    for i in range(7):
+        app.session_state["typing"] = None
+        app.chat_input[0].set_value(f"Explain topic {i}").run()
+    assert not app.exception
+    users = [h["content"] for h in app.session_state["history"] if h["role"] == "user"]
+    assert users == [f"Explain topic {i}" for i in range(7)]
+    assert max(seen) == Settings().max_context_messages  # context is still capped per request
+
+
 def test_workspace_section_removed(app):
     assert not app.selectbox and not app.text_input and not app.toggle
     assert not [e for e in app.sidebar.expander if e.label == "Rabbits"]

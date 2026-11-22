@@ -59,7 +59,13 @@ def on_submit() -> None:
         return
     st.session_state.input_error = None
     st.session_state.typing = None
-    context = [{"role": item["role"], "content": item["content"]} for item in st.session_state.history]
+    # Failed turns stay on screen but are never sent as context: their "reply" is an
+    # app error message, not something the model said. The request processor keeps
+    # only the most recent MAX_CONTEXT_MESSAGES of what remains.
+    context = [
+        {"role": item["role"], "content": item["content"]}
+        for item in st.session_state.history if not item.get("failed")
+    ]
     st.session_state.pending = {
         "prompt": prompt, "mode": MODE_MAP[MODE_KEYS[st.session_state.mode_index]], "context": context,
     }
@@ -219,15 +225,15 @@ def process_pending(settings: Settings) -> None:
         if result.fallback_used:
             st.session_state.total_fallback += 1
     message = result.error.message if (not result.ok and result.error) else (result.response or "")
+    failed = not result.ok
     st.session_state.history.extend([
-        {"role": "user", "content": pending["prompt"]},
-        {"role": "assistant", "content": message, "meta": {
+        {"role": "user", "content": pending["prompt"], "failed": failed},
+        {"role": "assistant", "content": message, "failed": failed, "meta": {
             "chip_html": _route_chip(outcome) if decision else "",
             "reason": result.fallback_reason or (decision.reason if decision else ""),
         }},
     ])
-    while len(st.session_state.history) > pipeline.settings.max_context_messages:
-        st.session_state.history.pop(0)
+    # The whole conversation stays visible; the context limit is applied per request.
     st.session_state.typing = (
         {"message_index": len(st.session_state.history) - 1, "started_at": time.monotonic()}
         if result.ok and message else None
