@@ -1,539 +1,321 @@
-"""Streamlit UI for the Hybrid LLM Router — redesigned.
+"""Alice: a focused chat workspace for local and cloud inference.
 
-Run with:  streamlit run app.py
+Run with: python3 -m streamlit run app.py
 """
 
 from __future__ import annotations
 
+import base64
+import html
 import logging
+import time
+from pathlib import Path
+from urllib.parse import quote
 
 import streamlit as st
 
+from hybrid_router.config import Settings, load_settings
+from hybrid_router.inference.cloud_engine import CloudEngine
+from hybrid_router.model_selection import discover_local_models, select_models
 from hybrid_router.models import Destination
 from hybrid_router.pipeline import HybridPipeline, PipelineOutcome
+from hybrid_router.ui import ALICE_LOGO, icon
+from hybrid_router.typing_effect import reveal_text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-MODES = {
-    "auto": {
-        "label": "Auto",
-        "icon": "⚡",
-        "desc": "Smart routing — picks local or cloud, falls back if needed",
-        "color": "#7C3AED",
-    },
-    "local": {
-        "label": "Native",
-        "icon": "🖥️",
-        "desc": "Always runs on your machine via Ollama. No cloud calls ever.",
-        "color": "#059669",
-    },
-    "cloud": {
-        "label": "Cloud",
-        "icon": "☁️",
-        "desc": "Always routes to the cloud model. Highest capability.",
-        "color": "#0EA5E9",
-    },
+MODE_MAP = {"Drink me!": "local", "Follow the rabbit": "auto", "Eat me!": "cloud"}
+MODE_KEYS = list(MODE_MAP)
+MODE_META = {
+    "Drink me!": {"icon": "potion", "desc": "On your device · No API cost"},
+    "Follow the rabbit": {"icon": "rabbit", "desc": "The right model, automatically"},
+    "Eat me!": {"icon": "cake", "desc": "Cloud inference for demanding tasks"},
 }
-
-# Rough cost estimate in USD per 1K tokens (just for display — not billed)
-COST_PER_1K_CLOUD = 0.00015   # gpt-4o-mini output
-COST_PER_1K_LOCAL = 0.0       # running locally = $0
-
-# ---------------------------------------------------------------------------
-# Styling
-# ---------------------------------------------------------------------------
-
-CUSTOM_CSS = """
-<style>
-/* ---- Global ---- */
-html, body, [data-testid="stAppViewContainer"] {
-    background-color: #0F0F12;
-    color: #E2E8F0;
-    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
-}
-
-[data-testid="stSidebar"] {
-    background-color: #16161D;
-    border-right: 1px solid #2A2A3A;
-}
-
-/* ---- Header ---- */
-.app-header {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 8px 0 20px 0;
-}
-.app-header .logo {
-    font-size: 2.4rem;
-    line-height: 1;
-}
-.app-header h1 {
-    margin: 0;
-    font-size: 1.7rem;
-    font-weight: 700;
-    color: #F1F5F9;
-    letter-spacing: -0.5px;
-}
-.app-header p {
-    margin: 2px 0 0 0;
-    font-size: 0.82rem;
-    color: #64748B;
-}
-
-/* ---- Mode cards ---- */
-.mode-grid {
-    display: flex;
-    gap: 10px;
-    margin-bottom: 24px;
-}
-.mode-card {
-    flex: 1;
-    padding: 14px 16px;
-    border-radius: 12px;
-    border: 2px solid #2A2A3A;
-    background: #16161D;
-    cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
-    text-align: center;
-}
-.mode-card.selected {
-    border-color: var(--mode-color);
-    background: color-mix(in srgb, var(--mode-color) 12%, #16161D);
-}
-.mode-card .icon { font-size: 1.5rem; }
-.mode-card .name {
-    font-weight: 700;
-    font-size: 0.95rem;
-    color: #F1F5F9;
-    margin-top: 6px;
-}
-.mode-card .desc {
-    font-size: 0.72rem;
-    color: #64748B;
-    margin-top: 4px;
-    line-height: 1.4;
-}
-
-/* ---- Chat bubbles ---- */
-.chat-wrap { display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px; }
-
-.bubble-user {
-    align-self: flex-end;
-    background: #7C3AED;
-    color: #fff;
-    border-radius: 16px 16px 4px 16px;
-    padding: 12px 16px;
-    max-width: 80%;
-    font-size: 0.9rem;
-    line-height: 1.6;
-    white-space: pre-wrap;
-}
-.bubble-assistant {
-    align-self: flex-start;
-    background: #1E1E2E;
-    color: #E2E8F0;
-    border-radius: 16px 16px 16px 4px;
-    padding: 12px 16px;
-    max-width: 85%;
-    font-size: 0.9rem;
-    line-height: 1.6;
-    border: 1px solid #2A2A3A;
-    white-space: pre-wrap;
-}
-
-/* ---- Route badge ---- */
-.route-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 0.72rem;
-    font-weight: 600;
-    padding: 3px 10px;
-    border-radius: 999px;
-    margin-bottom: 6px;
-}
-.badge-local  { background: #052E16; color: #34D399; border: 1px solid #059669; }
-.badge-cloud  { background: #082F49; color: #38BDF8; border: 1px solid #0EA5E9; }
-.badge-fallback { background: #431407; color: #FB923C; border: 1px solid #EA580C; }
-
-/* ---- Routing reason ---- */
-.route-reason {
-    font-size: 0.75rem;
-    color: #94A3B8;
-    margin: 0 0 10px 0;
-    padding: 8px 12px;
-    background: #16161D;
-    border-left: 3px solid #334155;
-    border-radius: 0 8px 8px 0;
-}
-
-/* ---- Savings counter ---- */
-.savings-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: #052E16;
-    border: 1px solid #059669;
-    color: #34D399;
-    padding: 4px 12px;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 600;
-}
-
-/* ---- Input area ---- */
-textarea { background: #16161D !important; color: #E2E8F0 !important; border-radius: 10px !important; }
-div[data-testid="stTextArea"] > div { background: #16161D; border-radius: 10px; }
-
-/* ---- Buttons ---- */
-.stButton > button {
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 0.88rem;
-    transition: opacity 0.15s;
-}
-.stButton > button:hover { opacity: 0.85; }
-
-/* ---- Divider ---- */
-hr { border-color: #2A2A3A; margin: 16px 0; }
-
-/* ---- Sidebar stats ---- */
-.stat-block {
-    background: #0F0F12;
-    border: 1px solid #2A2A3A;
-    border-radius: 10px;
-    padding: 12px 14px;
-    margin-bottom: 10px;
-}
-.stat-block .label { font-size: 0.72rem; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px; }
-.stat-block .value { font-size: 1.3rem; font-weight: 700; color: #F1F5F9; }
-
-/* ---- Error / warning overrides ---- */
-[data-testid="stAlert"] { border-radius: 10px; }
-</style>
-"""
-
-# ---------------------------------------------------------------------------
-# Pipeline cache
-# ---------------------------------------------------------------------------
+SUGGESTIONS = (
+    ("Light a candle!", "candle", "Explain a concept to me in simple terms: "),
+    ("Let’s cook!", "cook", "Help me draft a clear, concise message about "),
+    ("Derive a magic spell!", "spell", "Help me understand this code:\n"),
+)
+STYLE_PATH = Path(__file__).parent / "assets" / "style.css"
+FONT_STYLE_PATH = Path(__file__).parent / "assets" / "fonts" / "fonts.css"
+BACKGROUND_PATH = Path(__file__).parent / "assets" / "wonderland-alice-background.png"
 
 
-def get_pipeline() -> HybridPipeline:
-    return HybridPipeline()
+def get_pipeline(settings: Settings) -> HybridPipeline:
+    return HybridPipeline(settings=settings)
 
 
-# ---------------------------------------------------------------------------
-# Session state
-# ---------------------------------------------------------------------------
+@st.cache_data(ttl=60, show_spinner=False)
+def get_local_models(base_url: str):
+    return discover_local_models(base_url)
 
 
 def init_state() -> None:
-    st.session_state.setdefault("mode", "auto")
-    st.session_state.setdefault("processing", False)
-    st.session_state.setdefault("pending", None)
-    st.session_state.setdefault("history", [])      # [{role, content, meta}]
-    st.session_state.setdefault("input_error", None)
-    st.session_state.setdefault("use_context", True)
-    # stats
-    st.session_state.setdefault("total_local", 0)
-    st.session_state.setdefault("total_cloud", 0)
-    st.session_state.setdefault("total_fallback", 0)
-    st.session_state.setdefault("est_saved_tokens", 0)
-
-
-# ---------------------------------------------------------------------------
-# Actions
-# ---------------------------------------------------------------------------
+    for key, value in {
+        "mode_index": 1, "processing": False, "pending": None, "history": [],
+        "input_error": None, "typing": None, "use_context": True, "total_local": 0,
+        "total_cloud": 0, "total_fallback": 0, "est_saved_tokens": 0,
+    }.items():
+        st.session_state.setdefault(key, value)
 
 
 def on_submit() -> None:
-    prompt = st.session_state.get("prompt_input", "").strip()
+    prompt = (st.session_state.get("prompt_input") or "").strip()
     if not prompt:
-        st.session_state.input_error = "Please enter a prompt before submitting."
+        st.session_state.input_error = "Write a message to start the conversation."
         return
     st.session_state.input_error = None
+    st.session_state.typing = None
     context = []
     if st.session_state.use_context:
-        for item in st.session_state.history:
-            context.append({"role": item["role"], "content": item["content"]})
+        context = [{"role": item["role"], "content": item["content"]} for item in st.session_state.history]
     st.session_state.pending = {
-        "prompt": prompt,
-        "mode": st.session_state.mode,
-        "context": context,
+        "prompt": prompt, "mode": MODE_MAP[MODE_KEYS[st.session_state.mode_index]],
+        "context": context, "local_model": st.session_state.active_local_model,
+        "cloud_model": st.session_state.active_cloud_model,
     }
     st.session_state.processing = True
 
 
 def clear_chat() -> None:
     st.session_state.history = []
-    st.session_state.total_local = 0
-    st.session_state.total_cloud = 0
-    st.session_state.total_fallback = 0
-    st.session_state.est_saved_tokens = 0
+    st.session_state.typing = None
+    st.session_state.input_error = None
+    for key in ("total_local", "total_cloud", "total_fallback", "est_saved_tokens"):
+        st.session_state[key] = 0
 
 
-def set_mode(m: str) -> None:
-    st.session_state.mode = m
+def set_draft(prompt: str) -> None:
+    st.session_state.prompt_input = prompt
 
 
-# ---------------------------------------------------------------------------
-# Rendering helpers
-# ---------------------------------------------------------------------------
-
-
-def _route_badge(outcome: PipelineOutcome) -> str:
-    result, decision = outcome.result, outcome.decision
+def _route_chip(outcome: PipelineOutcome) -> str:
+    result = outcome.result
+    name = html.escape(result.model_name or "")
     if result.fallback_used:
-        return '<span class="route-badge badge-fallback">⚠️ Fallback → Cloud</span>'
+        return f'<span class="route-chip chip-fallback">{icon("cake")}Cloud fallback · {name}</span>'
     if result.model is Destination.LOCAL:
-        return f'<span class="route-badge badge-local">🖥️ Local · {result.model_name}</span>'
+        return f'<span class="route-chip">{icon("potion")}On device · {name}</span>'
     if result.model is Destination.CLOUD:
-        return f'<span class="route-badge badge-cloud">☁️ Cloud · {result.model_name}</span>'
+        return f'<span class="route-chip">{icon("cake")}Cloud · {name}</span>'
     return ""
 
 
-def render_mode_cards(busy: bool) -> None:
-    cols = st.columns(3)
-    for col, (key, info) in zip(cols, MODES.items()):
-        selected = st.session_state.mode == key
-        border = info["color"] if selected else "#2A2A3A"
-        bg = f"color-mix(in srgb, {info['color']} 12%, #16161D)" if selected else "#16161D"
-        html = f"""
-        <div style="
-            padding:14px 10px; border-radius:12px;
-            border: 2px solid {border};
-            background: {bg};
-            text-align:center; cursor:pointer;
-        ">
-          <div style="font-size:1.6rem">{info['icon']}</div>
-          <div style="font-weight:700; color:#F1F5F9; margin-top:6px; font-size:0.95rem">{info['label']}</div>
-          <div style="font-size:0.70rem; color:#94A3B8; margin-top:4px; line-height:1.35">{info['desc']}</div>
-        </div>"""
-        with col:
-            st.markdown(html, unsafe_allow_html=True)
-            if not busy:
-                st.button(
-                    f"{'✓ ' if selected else ''}{info['label']}",
-                    key=f"btn_mode_{key}",
-                    on_click=set_mode,
-                    args=(key,),
-                    use_container_width=True,
-                    type="primary" if selected else "secondary",
+def render_mode_picker(busy: bool) -> None:
+    mode = MODE_KEYS[st.session_state.mode_index]
+    image = quote(icon(MODE_META[mode]["icon"], color="#334457"), safe="")
+    with st.container(key="mode-picker", width=36):
+        st.markdown(f'<style>.st-key-mode-picker {{ --mode-icon: url("data:image/svg+xml,{image}"); }}</style>', unsafe_allow_html=True)
+        with st.popover(f"Choose mode: {mode}", disabled=busy):
+            with st.container(key="mode-sheet"):
+                st.markdown(
+                    f'<style>.st-key-mode-sheet {{ --selector-icon: url("data:image/svg+xml,{image}"); }}</style>'
+                    '<div class="mode-sheet-heading"><span>Wonders</span><span>Slide to choose</span></div>',
+                    unsafe_allow_html=True,
+                )
+                st.select_slider(
+                    "Wonders", options=[0, 1, 2], key="mode_index",
+                    format_func=lambda value: MODE_KEYS[value],
+                    label_visibility="collapsed", disabled=busy,
+                )
+                labels = "".join(
+                    '<span class="%s">%s</span>' % ("active" if index == st.session_state.mode_index else "", name)
+                    for index, name in enumerate(MODE_KEYS)
+                )
+                st.markdown(
+                    f'<div class="mode-sheet-stops">{labels}</div>'
+                    f'<div class="mode-sheet-detail">{MODE_META[mode]["desc"]}</div>',
+                    unsafe_allow_html=True,
                 )
 
 
-def render_chat_history() -> None:
-    if not st.session_state.history:
-        return
-    st.markdown('<div class="chat-wrap">', unsafe_allow_html=True)
-    for item in st.session_state.history:
-        if item["role"] == "user":
+
+@st.fragment(run_every=0.1 if st.session_state.get("typing") else None)
+def render_chat() -> None:
+    typing = st.session_state.get("typing")
+    for index, item in enumerate(st.session_state.history):
+        avatar = ":material/person:" if item["role"] == "user" else str(ALICE_LOGO)
+        with st.chat_message(item["role"], avatar=avatar):
+            if item["role"] == "assistant":
+                meta = item.get("meta", {})
+                if meta.get("chip_html"):
+                    st.markdown(meta["chip_html"], unsafe_allow_html=True)
+                if typing and index == typing["message_index"]:
+                    partial, complete = reveal_text(item["content"], time.monotonic() - typing["started_at"])
+                    if complete:
+                        st.session_state.typing = None
+                        st.rerun()
+                    with st.container(key="typing-response"):
+                        st.markdown(partial or "\u200b")
+                    if st.button("Show full response", key="finish_typing"):
+                        st.session_state.typing = None
+                        st.rerun()
+                else:
+                    st.markdown(item["content"])
+                if meta.get("reason") and not (typing and index == typing["message_index"]):
+                    with st.expander("Routing details"):
+                        st.caption(meta["reason"])
+            else:
+                st.markdown(item["content"])
+    if st.session_state.processing and st.session_state.pending:
+        with st.chat_message("user", avatar=":material/person:"):
+            st.markdown(st.session_state.pending["prompt"])
+        with st.chat_message("assistant", avatar=str(ALICE_LOGO)):
             st.markdown(
-                f'<div class="bubble-user">{item["content"]}</div>',
+                '<div class="thinking" role="status"><span class="thinking-dots"><i></i><i></i><i></i></span>Dreaming…</div>',
                 unsafe_allow_html=True,
             )
+
+
+def render_model_settings(settings: Settings, busy: bool) -> Settings:
+    st.session_state.setdefault("active_local_model", settings.local_model)
+    st.session_state.setdefault("active_cloud_model", settings.cloud_model)
+    if st.button("Refresh local models", icon=":material/refresh:", disabled=busy):
+        get_local_models.clear()
+    catalog = get_local_models(settings.ollama_base_url)
+    local_names = list(dict.fromkeys([st.session_state.active_local_model, settings.local_model, *catalog.names]))
+    with st.form("model_settings"):
+        local_name = st.selectbox("Local model", local_names, disabled=busy)
+        cloud_name = st.text_input(
+            "Cloud model", value=st.session_state.active_cloud_model, disabled=busy,
+            help="Enter an OpenAI model ID compatible with Chat Completions.",
+        )
+        applied = st.form_submit_button("Apply models", disabled=busy)
+    if applied:
+        try:
+            selected = select_models(settings, local_name, cloud_name)
+        except ValueError as exc:
+            st.error(str(exc))
         else:
-            meta = item.get("meta", {})
-            badge_html = meta.get("badge_html", "")
-            reason = meta.get("reason", "")
-            reason_html = (
-                f'<div class="route-reason">🔀 {reason}</div>' if reason else ""
-            )
-            st.markdown(
-                f'{badge_html}{reason_html}'
-                f'<div class="bubble-assistant">{item["content"]}</div>',
-                unsafe_allow_html=True,
-            )
-    st.markdown("</div>", unsafe_allow_html=True)
+            st.session_state.active_local_model = selected.local_model
+            st.session_state.active_cloud_model = selected.cloud_model
+            st.success("Models updated.")
+    selected = select_models(settings, st.session_state.active_local_model, st.session_state.active_cloud_model)
+    if catalog.error:
+        st.caption(catalog.error)
+    elif selected.local_model not in catalog.names:
+        st.warning("Selected local model is not installed. Pull it with Ollama, then refresh.")
+    st.caption("Model choices apply to this session, including fallback in Follow the rabbit mode.")
+    return selected
 
 
-def render_sidebar(pipeline: HybridPipeline) -> None:
-    s = pipeline.settings
+def render_sidebar(settings: Settings, busy: bool) -> Settings:
     with st.sidebar:
-        st.markdown("## ⚙️ Config")
         st.markdown(
-            f'<div class="stat-block">'
-            f'<div class="label">Local Model</div>'
-            f'<div class="value" style="font-size:0.95rem;color:#34D399">🖥️ {s.local_model}</div>'
-            f"</div>",
-            unsafe_allow_html=True,
+            f'<div class="sidebar-brand"><span class="brand-mark">{icon("brand", 36)}</span>'
+            '<span class="brand-name">Alice</span></div>', unsafe_allow_html=True,
         )
-        st.markdown(
-            f'<div class="stat-block">'
-            f'<div class="label">Cloud Model</div>'
-            f'<div class="value" style="font-size:0.95rem;color:#38BDF8">☁️ {s.cloud_model}</div>'
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-        if not pipeline.cloud_engine.configured:
-            st.warning("⚠️ OPENAI_API_KEY not set — cloud calls will fail.", icon="⚠️")
-
+        st.button("New dream", icon=":material/add:", on_click=clear_chat, use_container_width=True, disabled=busy)
+        st.markdown('<div class="sidebar-label">Workspace</div>', unsafe_allow_html=True)
+        with st.expander("Rabbits", icon=":material/tune:"):
+            selected = render_model_settings(settings, busy)
+            if not CloudEngine(selected).configured:
+                st.caption("Add an OpenAI API key to enable cloud inference.")
+        st.toggle("Remember", key="use_context", disabled=busy)
         st.divider()
-        st.markdown("## 📊 Session Stats")
-
+        st.markdown('<div class="sidebar-label">This dream</div>', unsafe_allow_html=True)
         total = st.session_state.total_local + st.session_state.total_cloud
-        saved_usd = (st.session_state.est_saved_tokens / 1000) * COST_PER_1K_CLOUD
+        stats = "".join(
+            f'<div class="session-stat {kind}"><strong>{value}</strong><span>{label}</span></div>'
+            for label, value, kind in (
+                ("Requests", total, ""), ("On device", st.session_state.total_local, "local"),
+                ("Cloud", st.session_state.total_cloud, ""), ("Fallbacks", st.session_state.total_fallback, ""),
+            )
+        )
+        st.markdown(f'<div class="session-stats">{stats}</div>', unsafe_allow_html=True)
+        if st.session_state.total_local:
+            st.markdown(f'<div class="saved-tokens">~{st.session_state.est_saved_tokens:,} cloud output tokens avoided</div>', unsafe_allow_html=True)
+            st.caption("Estimated from response length; actual savings vary by model.")
+        st.divider()
+        for model, symbol in ((selected.local_model, "potion"), (selected.cloud_model, "cake")):
+            st.markdown(f'<div class="sidebar-model">{icon(symbol)}<span>{html.escape(model)}</span></div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-footer">Built for wonders.</div>', unsafe_allow_html=True)
+    return selected
 
-        for label, val, color in [
-            ("Total Requests", total, "#F1F5F9"),
-            ("Ran Locally", st.session_state.total_local, "#34D399"),
-            ("Sent to Cloud", st.session_state.total_cloud, "#38BDF8"),
-            ("Fallbacks", st.session_state.total_fallback, "#FB923C"),
-        ]:
+
+def render_composer(busy: bool) -> None:
+    mode = MODE_KEYS[st.session_state.mode_index]
+    with st.container(key="composer"):
+        st.chat_input("Message Alice…", key="prompt_input", disabled=busy, on_submit=on_submit)
+        with st.container(key="composer-toolbar", horizontal=True, vertical_alignment="center", gap="small"):
+            render_mode_picker(busy)
             st.markdown(
-                f'<div class="stat-block">'
-                f'<div class="label">{label}</div>'
-                f'<div class="value" style="color:{color}">{val}</div>'
-                f"</div>",
+                f'<div class="mode-summary"><strong>{mode}</strong><span>{MODE_META[mode]["desc"]}</span></div>',
                 unsafe_allow_html=True,
             )
 
-        # Estimated savings
-        if st.session_state.total_local > 0:
-            st.markdown(
-                f'<div style="margin-top:10px">'
-                f'<span class="savings-pill">💰 Est. saved ~\${saved_usd:.4f} vs all-cloud</span>'
-                f"</div>",
-                unsafe_allow_html=True,
-            )
 
-        st.divider()
-        st.markdown("## 🛠 Settings")
-        st.session_state.use_context = st.toggle(
-            "Send conversation context", value=st.session_state.use_context
-        )
-        turns = len([h for h in st.session_state.history if h["role"] == "user"])
-        st.caption(f"{turns} turn(s) in context")
-        st.button("🗑️ Clear conversation", on_click=clear_chat, use_container_width=True)
-
-        st.divider()
-        st.markdown(
-            '<p style="font-size:0.72rem;color:#334155;text-align:center">'
-            "Hybrid LLM Router · CutieHack 2026</p>",
-            unsafe_allow_html=True,
-        )
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def process_pending(settings: Settings) -> None:
+    pending = st.session_state.pending
+    pipeline = get_pipeline(select_models(settings, pending["local_model"], pending["cloud_model"]))
+    outcome = pipeline.run(pending["prompt"], pending["mode"], pending["context"])
+    result, decision = outcome.result, outcome.decision
+    if result.ok:
+        if result.model is Destination.LOCAL:
+            st.session_state.total_local += 1
+            st.session_state.est_saved_tokens += max(len(result.response) // 4, 1)
+        elif result.model is Destination.CLOUD:
+            st.session_state.total_cloud += 1
+        if result.fallback_used:
+            st.session_state.total_fallback += 1
+    message = result.error.message if (not result.ok and result.error) else (result.response or "")
+    st.session_state.history.extend([
+        {"role": "user", "content": pending["prompt"]},
+        {"role": "assistant", "content": message, "meta": {
+            "chip_html": _route_chip(outcome) if decision else "",
+            "reason": result.fallback_reason or (decision.reason if decision else ""),
+        }},
+    ])
+    while len(st.session_state.history) > pipeline.settings.max_context_messages:
+        st.session_state.history.pop(0)
+    st.session_state.typing = (
+        {"message_index": len(st.session_state.history) - 1, "started_at": time.monotonic()}
+        if result.ok and message else None
+    )
+    st.session_state.pending = None
+    st.session_state.processing = False
+    st.rerun()
 
 
 def main() -> None:
-    st.set_page_config(
-        page_title="Hybrid LLM Router",
-        page_icon="⚡",
-        layout="wide",
-        initial_sidebar_state="expanded",
+    st.set_page_config(page_title="Alice — Your AI workspace", page_icon=str(ALICE_LOGO), layout="centered", initial_sidebar_state="auto")
+    background_data = base64.b64encode(BACKGROUND_PATH.read_bytes()).decode("ascii")
+    suggestion_styles = "".join(
+        f'.st-key-suggestion_{symbol} {{ --suggestion-icon: url("data:image/svg+xml,{quote(icon(symbol, color="#f0d09a"), safe="")}"); }}'
+        for _, symbol, _ in SUGGESTIONS
     )
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-    init_state()
-
-    pipeline = get_pipeline()
-    busy = st.session_state.processing
-
-    render_sidebar(pipeline)
-
-    # ---- Header ----
     st.markdown(
-        """
-        <div class="app-header">
-          <div class="logo">⚡</div>
-          <div>
-            <h1>Hybrid LLM Router</h1>
-            <p>Save money by running simple tasks locally, sending complex ones to the cloud.</p>
-          </div>
-        </div>
-        """,
+        f'<style>:root {{ --wonderland-background: url("data:image/png;base64,{background_data}"); }}'
+        f'{FONT_STYLE_PATH.read_text()}\n{STYLE_PATH.read_text()}\n{suggestion_styles}</style>',
         unsafe_allow_html=True,
     )
-
-    # ---- Mode selector ----
-    st.markdown("### Choose execution mode")
-    render_mode_cards(busy)
-    st.divider()
-
-    # ---- Chat history ----
-    render_chat_history()
-
-    # ---- Input ----
+    init_state()
+    busy = st.session_state.processing
+    settings = render_sidebar(load_settings(), busy)
+    st.markdown(
+        '<div class="workspace-topbar">'
+        f'<div class="workspace-type">{icon("brand")}LOCAL + CLOUD</div></div>', unsafe_allow_html=True,
+    )
+    empty = not st.session_state.history and not busy
+    if empty:
+        st.markdown(
+            f'<div class="welcome"><div class="welcome-mark">{icon("brand", 72)}</div>'
+            '<h1>What shall we dream up?</h1><p>Follow your curiosity. A little wonder starts here.</p></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        with st.container(key="conversation"):
+            render_chat()
     if st.session_state.input_error:
         st.warning(st.session_state.input_error)
-
-    with st.container():
-        prompt_col, btn_col = st.columns([9, 1])
-        with prompt_col:
-            st.text_area(
-                "Your prompt",
-                key="prompt_input",
-                height=120,
-                disabled=busy,
-                placeholder=(
-                    "e.g. Explain binary search in simple terms  —  "
-                    f"Mode: {MODES[st.session_state.mode]['label']}"
-                ),
-                label_visibility="collapsed",
-            )
-        with btn_col:
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.button(
-                "Send ➤" if not busy else "...",
-                type="primary",
-                on_click=on_submit,
-                disabled=busy,
-                use_container_width=True,
-            )
-
-    # ---- Processing ----
+    render_composer(busy)
+    if empty:
+        with st.container(key="suggestions"):
+            for col, (label, symbol, prompt) in zip(st.columns(3), SUGGESTIONS):
+                col.button(label, key=f"suggestion_{symbol}", on_click=set_draft, args=(prompt,), use_container_width=True)
+    st.markdown('<div class="composer-footnote">Local when it fits. Cloud when it counts.</div>', unsafe_allow_html=True)
     if busy and st.session_state.pending:
-        pending = st.session_state.pending
-        mode_info = MODES[pending["mode"]]
-        with st.spinner(f"{mode_info['icon']} Routing & generating…"):
-            outcome = pipeline.run(pending["prompt"], pending["mode"], pending["context"])
-
-        result, decision = outcome.result, outcome.decision
-
-        # Update stats
-        if result.ok:
-            if result.model is Destination.LOCAL:
-                st.session_state.total_local += 1
-                # Estimate tokens saved: rough 4 chars per token
-                token_estimate = max(len(result.response) // 4, 1)
-                st.session_state.est_saved_tokens += token_estimate
-            elif result.model is Destination.CLOUD:
-                st.session_state.total_cloud += 1
-            if result.fallback_used:
-                st.session_state.total_fallback += 1
-
-        # Build meta for the assistant bubble
-        badge_html = _route_badge(outcome) if decision else ""
-        reason = decision.reason if decision else ""
-        if not result.ok:
-            msg = result.error.message if result.error else "Inference failed."
-        else:
-            msg = result.response or ""
-
-        # Append to history
-        st.session_state.history.append({"role": "user", "content": pending["prompt"]})
-        st.session_state.history.append({
-            "role": "assistant",
-            "content": msg,
-            "meta": {"badge_html": badge_html, "reason": reason},
-        })
-
-        # Trim context
-        s = pipeline.settings
-        while len(st.session_state.history) > s.max_context_messages:
-            st.session_state.history.pop(0)
-
-        st.session_state.pending = None
-        st.session_state.processing = False
-        st.rerun()
+        process_pending(settings)
 
 
 main()

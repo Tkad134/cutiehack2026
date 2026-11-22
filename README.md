@@ -1,6 +1,6 @@
-# Hybrid LLM Router
+# Alice — Hybrid Router
 
-Routes each prompt to a **local LLM** (Qwen3 1.7B via Ollama) or a **cloud LLM** (OpenAI) *before* inference,
+Routes each prompt to a **local LLM** (Qwen3.5 35B via Ollama by default) or a **cloud LLM** (OpenAI) *before* inference,
 to save cloud tokens while keeping answer quality acceptable. If the local model fails in Automatic mode,
 the request is retried **once** in the cloud.
 
@@ -18,7 +18,7 @@ Streamlit UI → Request Processor → Routing Engine ─┬→ Local Engine (Ol
    ```
 2. Install Ollama (https://ollama.com/download), then pull the model:
    ```bash
-   ollama pull qwen3:1.7b
+   ollama pull qwen3.5:35b
    ```
 3. Configure the cloud model (optional; without it, cloud routing and fallback report a clear error):
    ```bash
@@ -30,6 +30,27 @@ Streamlit UI → Request Processor → Routing Engine ─┬→ Local Engine (Ol
    ```
 
 Run the tests with `python -m pytest -q`. They use fake engines, so they don't need Ollama or an API key.
+Install the test runner separately with `python -m pip install pytest` if needed.
+
+## Model selection
+
+The sidebar lists installed Ollama models and accepts a cloud model ID compatible with OpenAI Chat Completions.
+Choose the models and click **Apply models**. Changes affect new requests and Follow the rabbit fallback in the current
+browser session. `.env` supplies defaults for new sessions. **Refresh local models** reloads the installed list;
+discovery is otherwise cached for 60 seconds. No model downloads or cloud requests occur when choosing models.
+If Ollama is unavailable, the configured local model remains selectable and normal inference error handling applies.
+
+A circular mode button below the message input opens a smooth sliding selector for Drink me! (local only), Follow the rabbit (automatic, the default), and Eat me! (cloud only). Matching potion, rabbit, and frosted cake icons sit on a syrup-and-frosting slider. Descriptions and routing behavior are unchanged. Rabbits settings are available in the sidebar, and assistant replies support Markdown, tables, and code blocks. The glass theme is defined in `assets/style.css` and `.streamlit/config.toml`; Streamlit 1.50 or newer is required.
+Analytics show approximate cloud output tokens avoided (response characters / 4), rather than a dollar amount
+based on a fixed model price. This estimate excludes input tokens and does not measure actual billed savings.
+
+## Offline routing benchmark
+
+Run `python -m hybrid_router.benchmark` for the checked-in policy cases, or supply `--cases path/to/cases.json`.
+Each case has an `id`, `prompt`, and expected destination (`local` or `cloud`); optional `context` and `mode`
+exercise history and manual overrides. The command reports agreement with hand-labeled policy expectations,
+the local request share, and mismatches. It exits nonzero on mismatches and makes no inference calls.
+These cases support rule tuning; response accuracy and token savings require a separate inference evaluation.
 
 ## Execution modes
 
@@ -72,7 +93,7 @@ Each decision returns `request_id`, `destination`, `reason`, `strategy` and `cat
 {
   "request_id": "req_3f9a1c0b2d4e",
   "model": "local",
-  "model_name": "qwen3:1.7b",
+  "model_name": "qwen3.5:35b",
   "response": "Binary search works by...",
   "status": "success",
   "fallback_used": false,
@@ -98,10 +119,17 @@ hybrid_router/
   inference/cloud_engine.py    OpenAI client
   response_handler.py          Validation + bounded fallback
   pipeline.py                  Wires the components together; never raises to the UI
-tests/                         pytest suite (86 tests)
+  model_selection.py           Installed model discovery and session overrides
+  benchmark.py                 Offline route-policy benchmark CLI
+benchmarks/router_cases.json   Hand-labeled policy expectations
+tests/                         pytest suite, including Streamlit interaction checks
 ```
 
 ## Configuration
 
 See `.env.example`. The main settings are `LOCAL_MODEL`, `OLLAMA_BASE_URL`, `LOCAL_TIMEOUT_SECONDS`, `LOCAL_MAX_INPUT_CHARS`,
 `OPENAI_MODEL`, `CLOUD_TIMEOUT_SECONDS`, `MAX_PROMPT_CHARS` and `MAX_CONTEXT_MESSAGES`.
+
+## Storybook branding
+
+Alice uses Griffy for ornate headings and Fraunces for all other text, matching the Cutie Hack 2026 reference. Both fonts are bundled locally under `assets/fonts/` with their OFL licenses; font files do not require an external connection. The Alice-inspired AI portrait is an original SVG in `assets/alice-logo.svg`.

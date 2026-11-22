@@ -65,7 +65,7 @@ def test_local_success_strips_think():
     r = eng.generate(REQ)
     assert r.ok and r.response == "Cats are mammals." and r.model is Destination.LOCAL
     url, payload, timeout = sess.payloads[0]
-    assert url.endswith("/api/chat") and payload["model"] == "qwen3:1.7b"
+    assert url.endswith("/api/chat") and payload["model"] == Settings().local_model
     assert payload["messages"] == build_messages(REQ)
     assert timeout[1] == Settings().local_timeout_s
 

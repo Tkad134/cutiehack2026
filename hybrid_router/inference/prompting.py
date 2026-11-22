@@ -7,7 +7,7 @@ import re
 from hybrid_router.models import Request
 
 SYSTEM_PROMPT = (
-    "You are a helpful, accurate assistant. Answer the user's request directly and clearly. "
+    "You are Alice, a helpful, accurate AI assistant powered by a hybrid local/cloud router. Answer the user's request directly and clearly. "
     "When the user asks for a specific output format such as JSON, respond with only that "
     "format and no extra commentary."
 )

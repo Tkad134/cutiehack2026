@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 class Settings:
     # Local inference (Ollama)
     ollama_base_url: str = "http://localhost:11434"
-    local_model: str = "qwen3:1.7b"
+    local_model: str = "qwen3.5:35b"
     local_timeout_s: float = 120.0
     local_num_ctx: int = 4096
     local_max_input_chars: int = 6000  # routing signal: longer inputs go to the cloud
@@ -45,7 +45,7 @@ def _get(name: str, default, cast):
 
 
 def load_settings() -> Settings:
-    load_dotenv()
+    load_dotenv(override=True)
     d = Settings()
     return Settings(
         ollama_base_url=_get("OLLAMA_BASE_URL", d.ollama_base_url, str).rstrip("/"),

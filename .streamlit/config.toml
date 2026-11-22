@@ -1,0 +1,9 @@
+[theme]
+base = "light"
+primaryColor = "#A97730"
+backgroundColor = "#3B536C"
+secondaryBackgroundColor = "#FAF6ED"
+textColor = "#334457"
+font = "Fraunces, Georgia, serif"
+headingFont = "Griffy, Georgia, serif"
+codeFont = "Fraunces, Georgia, serif"
