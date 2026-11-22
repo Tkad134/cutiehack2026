@@ -40,7 +40,7 @@ browser session. `.env` supplies defaults for new sessions. **Refresh local mode
 discovery is otherwise cached for 60 seconds. No model downloads or cloud requests occur when choosing models.
 If Ollama is unavailable, the configured local model remains selectable and normal inference error handling applies.
 
-A circular mode button below the message input opens a smooth sliding selector for Drink me! (local only), Follow the rabbit (automatic, the default), and Eat me! (cloud only). Matching potion, rabbit, and frosted cake icons sit on a syrup-and-frosting slider. Descriptions and routing behavior are unchanged. Rabbits settings are available in the sidebar, and assistant replies support Markdown, tables, and code blocks. The glass theme is defined in `assets/style.css` and `.streamlit/config.toml`; Streamlit 1.50 or newer is required.
+A circular mode button below the message input opens a smooth sliding selector for Drink me! (local only), Follow the rabbit (automatic, the default), and Eat me! (cloud only). Matching potion, rabbit, and frosted cake icons sit on a syrup-and-frosting slider. Descriptions and routing behavior are unchanged. Assistant replies support Markdown, tables, code blocks, and LaTeX math. The glass theme is defined in `assets/style.css` and `.streamlit/config.toml`. The app is tested on Streamlit 1.67.0, which `requirements.txt` pins so every laptop renders the same layout. The composer CSS also works on Streamlit 1.50.
 Analytics show approximate cloud output tokens avoided (response characters / 4), rather than a dollar amount
 based on a fixed model price. This estimate excludes input tokens and does not measure actual billed savings.
 

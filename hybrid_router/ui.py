@@ -1,6 +1,26 @@
-"""Small, consistent vector marks used by the chat interface."""
+"""Small, consistent vector marks and display helpers used by the chat interface."""
 
+import re
 from pathlib import Path
+
+# Code spans/blocks are left untouched; math conversion only applies outside them.
+_CODE = re.compile(r"(```.*?```|`[^`\n]*`)", re.DOTALL)
+_DISPLAY_MATH = re.compile(r"\\\[(.+?)\\\]", re.DOTALL)
+_INLINE_MATH = re.compile(r"\\\((.+?)\\\)", re.DOTALL)
+
+
+def markdown_math(text: str) -> str:
+    """Rewrite LaTeX \\( … \\) and \\[ … \\] delimiters as $ … $ and $$ … $$.
+
+    OpenAI models write math with backslash delimiters, which Streamlit's Markdown
+    does not render (the backslashes are treated as escapes and dropped). Streamlit
+    renders math written with dollar delimiters.
+    """
+    parts = _CODE.split(text)
+    for i in range(0, len(parts), 2):  # even indices are outside code
+        part = _DISPLAY_MATH.sub(lambda m: f"\n$$\n{m.group(1).strip()}\n$$\n", parts[i])
+        parts[i] = _INLINE_MATH.sub(lambda m: f"${m.group(1).strip()}$", part)
+    return "".join(parts)
 
 ALICE_LOGO = Path(__file__).resolve().parents[1] / "assets" / "alice-logo.svg"
 

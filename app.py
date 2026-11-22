@@ -17,7 +17,7 @@ import streamlit as st
 from hybrid_router.config import Settings, load_settings
 from hybrid_router.models import Destination
 from hybrid_router.pipeline import HybridPipeline, PipelineOutcome
-from hybrid_router.ui import ALICE_LOGO, icon
+from hybrid_router.ui import ALICE_LOGO, icon, markdown_math
 from hybrid_router.typing_effect import reveal_text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -144,12 +144,12 @@ def render_chat() -> None:
                         st.session_state.typing = None
                         st.rerun()
                     with st.container(key="typing-response"):
-                        st.markdown(partial or "\u200b")
+                        st.markdown(markdown_math(partial) or "\u200b")
                     if st.button("Show full response", key="finish_typing"):
                         st.session_state.typing = None
                         st.rerun()
                 else:
-                    st.markdown(item["content"])
+                    st.markdown(markdown_math(item["content"]))
                 if meta.get("reason") and not (typing and index == typing["message_index"]):
                     with st.expander("Routing details"):
                         st.caption(meta["reason"])

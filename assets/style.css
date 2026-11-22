@@ -596,26 +596,43 @@ button:not(:disabled):active { transform: translateY(0) scale(.97); }
    current markup.
    --------------------------------------------------------------------------- */
 
-/* Message Alice field: a white text box, with the send arrow in its own bubble beside it. */
+/* Message Alice field: a cream text box, with the send arrow in its own bubble beside it.
+   Streamlit versions nest the chat input differently (1.50 wraps the textarea in
+   BaseWeb textarea/base-input divs; 1.67 uses one plain wrapper and an extra row div),
+   so these rules locate elements by what they contain rather than by depth:
+     row  = the element whose child holds the send button
+     box  = the row's child that holds the textarea                                    */
 .st-key-composer [data-testid="stChatInput"] > div {
-    display: block; min-height: 56px; padding: 0;
+    min-height: 56px; padding: 0;
     background: transparent; border: 0; border-radius: 0; box-shadow: none;
 }
-.st-key-composer [data-testid="stChatInput"] > div > div {
-    display: flex; align-items: center; gap: 12px;
+/* Row: text box and send bubble side by side. */
+.st-key-composer [data-testid="stChatInput"] div:has(> div > [data-testid="stChatInputSubmitButton"]) {
+    display: flex !important; flex-direction: row; flex-wrap: nowrap;
+    align-items: center; gap: 12px; grid-template-columns: none;
 }
-.st-key-composer [data-testid="stChatInput"] > div > div > div:has(> [data-testid="stChatInputTextArea"]) {
-    flex: 1 1 auto; min-width: 0; padding: 0;
+/* Box: the only element with a border and background. */
+.st-key-composer [data-testid="stChatInput"] div:has(> div > [data-testid="stChatInputSubmitButton"])
+    > div:has([data-testid="stChatInputTextArea"]) {
+    flex: 1 1 auto; min-width: 0; width: auto; padding: 0;
     background: linear-gradient(100deg, #fcf8f1, #f2e9d8);
     border: 1px solid #e2b872; border-radius: 22px;
     box-shadow: 0 6px 24px rgba(26,44,62,.13), inset 0 1px 0 rgba(255,255,255,.8);
     transition: border-color .2s ease, box-shadow .2s ease;
 }
-.st-key-composer [data-testid="stChatInput"] > div > div > div:has(> [data-testid="stChatInputTextArea"]:focus) {
+.st-key-composer [data-testid="stChatInput"] div:has(> div > [data-testid="stChatInputSubmitButton"])
+    > div:has([data-testid="stChatInputTextArea"]:focus) {
     border-color: #e7b66a; box-shadow: 0 0 0 3px rgba(246,205,134,.13);
 }
-.st-key-composer [data-testid="stChatInput"] > div > div > div:has(> [data-testid="stChatInputSubmitButton"]) {
+/* Anything between the box and the textarea (1.50's base-input) stays invisible. */
+.st-key-composer [data-testid="stChatInput"] div:has(> div > [data-testid="stChatInputSubmitButton"])
+    > div:has([data-testid="stChatInputTextArea"]) div:has(> [data-testid="stChatInputTextArea"]) {
+    background: transparent !important; border: 0 !important; border-radius: 0; box-shadow: none !important;
+}
+/* Send bubble slot. */
+.st-key-composer [data-testid="stChatInput"] div:has(> [data-testid="stChatInputSubmitButton"]) {
     flex: 0 0 52px; width: 52px; height: 52px; margin: 0; padding: 0;
+    position: static; inset: auto;
     display: flex; align-items: center; justify-content: center;
 }
 /* Send bubble. Empty prompt: glass bubble (translucent fill, thin light ring, white arrow).
